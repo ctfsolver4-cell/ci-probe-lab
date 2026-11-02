@@ -83,6 +83,39 @@ jobs:
           restore-keys: |
             qp-main-
 
+      - name: "CONTROL (push): same-scope restore from refs/heads/main must HIT"
+        if: github.event_name == 'push'
+        id: pos_main
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: from-main-pos
+          key: qp-main-${{ github.run_id }}
+          restore-keys: |
+            qp-main-
+
+      - name: "CONTROL (pull_request): same-ref restore from refs/pull/N/merge must HIT"
+        if: github.event_name == 'pull_request'
+        id: pos_pr
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: from-pr-self
+          key: qp-pr-${{ github.run_id }}
+          restore-keys: |
+            qp-pr-
+
+      - name: "CROSSING: can a default-branch run read a pull_request run's cache entry?"
+        if: github.event_name == 'push'
+        id: r_prread
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: from-pr-read
+          key: qp-pr-${{ github.run_id }}
+          restore-keys: |
+            qp-pr-
+
       - name: results
         if: always()
         run: |
@@ -90,6 +123,9 @@ jobs:
           echo "matched-from-main=${{ steps.r_main.outputs.cache-matched-key }}"
           echo "matched-from-mg=${{ steps.r_mg.outputs.cache-matched-key }}"
           echo "matched-from-pr=${{ steps.r_pr.outputs.cache-matched-key }}"
-          for d in from-main from-mg from-pr; do
+          echo "CONTROL-push-reads-main=${{ steps.pos_main.outputs.cache-matched-key }}"
+          echo "CONTROL-pr-reads-pr=${{ steps.pos_pr.outputs.cache-matched-key }}"
+          echo "CROSSING-push-reads-pr=${{ steps.r_prread.outputs.cache-matched-key }}"
+          for d in from-main from-mg from-pr from-main-pos from-pr-self from-pr-read; do
             if [ -f "$d/marker.txt" ]; then echo "CONTENT $d:"; cat "$d/marker.txt"; fi
           done
