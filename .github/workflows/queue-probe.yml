@@ -1,10 +1,4 @@
 name: queue-probe
-# Measurements taken by this workflow (see ci-artifact-trust/findings/001 for the closed cells):
-#   1. what `github.ref` / `github.sha` a merge_group run actually gets
-#   2. whether a merge_group run's cache SAVE succeeds, and into which service-assigned `ref`
-#      (the caches API exposes the scope -> this is the answer the earlier probe could not get)
-#   3. whether a push-to-main run can RESTORE an entry written by a merge_group run (prefix qp-mg-)
-#   4. reverse direction: whether a merge_group run can restore a push-to-main entry (prefix qp-main-)
 on:
   pull_request:
     branches: [main]
@@ -24,11 +18,10 @@ jobs:
           echo "event=${{ github.event_name }}"
           echo "ref=${{ github.ref }}"
           echo "base_ref=${{ github.base_ref }}"
-          echo "sha=${{ github.sha }}"
-          echo "head_sha=${{ github.event.merge_group.head_sha }}"
+          echo "merge_group_head_sha=${{ github.event.merge_group.head_sha }}"
 
-      - id: k
-        name: pick an event-specific key prefix
+      - name: pick an event-specific key prefix
+        id: k
         run: |
           case "${{ github.event_name }}" in
             pull_request) P=pr ;;
@@ -50,49 +43,42 @@ jobs:
           path: payload
           key: qp-${{ steps.k.outputs.prefix }}-${{ github.run_id }}
 
-      - name: RESTORE - can a merge_group run read the default-branch scope?
-        if: github.event_name == 'merge_group'
-        id: r_main
-        uses: actions/cache/restore@v4
-        continue-on-error: true
-        with:
-          path: from-main
-          key: qp-main-${{ github.run_id }}
-          restore-keys: |
-            qp-main-
-
-      - name: RESTORE - can a default-branch run read the merge-queue scope?
-        if: github.event_name == 'push'
-        id: r_mg
-        uses: actions/cache/restore@v4
-        continue-on-error: true
-        with:
-          path: from-mg
-          key: qp-mg-${{ github.run_id }}
-          restore-keys: |
-            qp-mg-
-
-      - name: "RESTORE - baseline: can a pull_request run read the default-branch scope?"
-        if: github.event_name == 'pull_request'
-        id: r_pr
-        uses: actions/cache/restore@v4
-        continue-on-error: true
-        with:
-          path: from-pr
-          key: qp-main-${{ github.run_id }}
-          restore-keys: |
-            qp-main-
-
+      # Every restore below uses the SAME path as the save step on purpose: actions/cache derives
+      # the lookup "version" from the paths (+compression), so a different path can never match a
+      # saved entry. The first iteration of this probe used distinct paths per step and every
+      # lookup missed, including the same-scope control - so no scope conclusion was drawn from it.
       - name: "CONTROL (push): same-scope restore from refs/heads/main must HIT"
         if: github.event_name == 'push'
         id: pos_main
         uses: actions/cache/restore@v4
         continue-on-error: true
         with:
-          path: from-main-pos
+          path: payload
           key: qp-main-${{ github.run_id }}
           restore-keys: |
             qp-main-
+
+      - name: "CROSSING: can a default-branch run read a pull_request cache entry?"
+        if: github.event_name == 'push'
+        id: r_prread
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: payload
+          key: qp-pr-${{ github.run_id }}
+          restore-keys: |
+            qp-pr-
+
+      - name: "RESTORE: can a default-branch run read the merge-queue scope?"
+        if: github.event_name == 'push'
+        id: r_mg
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: payload
+          key: qp-mg-${{ github.run_id }}
+          restore-keys: |
+            qp-mg-
 
       - name: "CONTROL (pull_request): same-ref restore from refs/pull/N/merge must HIT"
         if: github.event_name == 'pull_request'
@@ -100,32 +86,42 @@ jobs:
         uses: actions/cache/restore@v4
         continue-on-error: true
         with:
-          path: from-pr-self
+          path: payload
           key: qp-pr-${{ github.run_id }}
           restore-keys: |
             qp-pr-
 
-      - name: "CROSSING: can a default-branch run read a pull_request run's cache entry?"
-        if: github.event_name == 'push'
-        id: r_prread
+      - name: "RESTORE: can a pull_request run read the default-branch scope?"
+        if: github.event_name == 'pull_request'
+        id: r_pr
         uses: actions/cache/restore@v4
         continue-on-error: true
         with:
-          path: from-pr-read
-          key: qp-pr-${{ github.run_id }}
+          path: payload
+          key: qp-main-${{ github.run_id }}
           restore-keys: |
-            qp-pr-
+            qp-main-
+
+      - name: "RESTORE: can a merge_group run read the default-branch scope?"
+        if: github.event_name == 'merge_group'
+        id: r_main
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: payload
+          key: qp-main-${{ github.run_id }}
+          restore-keys: |
+            qp-main-
 
       - name: results
         if: always()
         run: |
           echo "save.outcome=${{ steps.save.outcome }}"
-          echo "matched-from-main=${{ steps.r_main.outputs.cache-matched-key }}"
-          echo "matched-from-mg=${{ steps.r_mg.outputs.cache-matched-key }}"
-          echo "matched-from-pr=${{ steps.r_pr.outputs.cache-matched-key }}"
           echo "CONTROL-push-reads-main=${{ steps.pos_main.outputs.cache-matched-key }}"
-          echo "CONTROL-pr-reads-pr=${{ steps.pos_pr.outputs.cache-matched-key }}"
           echo "CROSSING-push-reads-pr=${{ steps.r_prread.outputs.cache-matched-key }}"
-          for d in from-main from-mg from-pr from-main-pos from-pr-self from-pr-read; do
-            if [ -f "$d/marker.txt" ]; then echo "CONTENT $d:"; cat "$d/marker.txt"; fi
-          done
+          echo "push-reads-mg=${{ steps.r_mg.outputs.cache-matched-key }}"
+          echo "CONTROL-pr-reads-pr=${{ steps.pos_pr.outputs.cache-matched-key }}"
+          echo "pr-reads-main=${{ steps.r_pr.outputs.cache-matched-key }}"
+          echo "mg-reads-main=${{ steps.r_main.outputs.cache-matched-key }}"
+          echo "--- payload/marker.txt (reflects the last restore that hit) ---"
+          cat payload/marker.txt || true
