@@ -1,0 +1,95 @@
+name: queue-probe
+# Measurements taken by this workflow (see ci-artifact-trust/findings/001 for the closed cells):
+#   1. what `github.ref` / `github.sha` a merge_group run actually gets
+#   2. whether a merge_group run's cache SAVE succeeds, and into which service-assigned `ref`
+#      (the caches API exposes the scope -> this is the answer the earlier probe could not get)
+#   3. whether a push-to-main run can RESTORE an entry written by a merge_group run (prefix qp-mg-)
+#   4. reverse direction: whether a merge_group run can restore a push-to-main entry (prefix qp-main-)
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  queue-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: context
+        run: |
+          echo "event=${{ github.event_name }}"
+          echo "ref=${{ github.ref }}"
+          echo "base_ref=${{ github.base_ref }}"
+          echo "sha=${{ github.sha }}"
+          echo "head_sha=${{ github.event.merge_group.head_sha }}"
+
+      - id: k
+        name: pick an event-specific key prefix
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request) P=pr ;;
+            merge_group)  P=mg ;;
+            *)            P=main ;;
+          esac
+          echo "prefix=$P" >> "$GITHUB_OUTPUT"
+
+      - name: build a marker payload
+        run: |
+          mkdir -p payload
+          printf 'event=%s ref=%s run=%s\n' "${{ github.event_name }}" "${{ github.ref }}" "${{ github.run_id }}" > payload/marker.txt
+
+      - name: SAVE (does this run get a write-capable cache token?)
+        id: save
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: payload
+          key: qp-${{ steps.k.outputs.prefix }}-${{ github.run_id }}
+
+      - name: RESTORE - can a merge_group run read the default-branch scope?
+        if: github.event_name == 'merge_group'
+        id: r_main
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: from-main
+          key: qp-main-${{ github.run_id }}
+          restore-keys: |
+            qp-main-
+
+      - name: RESTORE - can a default-branch run read the merge-queue scope?
+        if: github.event_name == 'push'
+        id: r_mg
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: from-mg
+          key: qp-mg-${{ github.run_id }}
+          restore-keys: |
+            qp-mg-
+
+      - name: RESTORE - baseline: can a pull_request run read the default-branch scope?
+        if: github.event_name == 'pull_request'
+        id: r_pr
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: from-pr
+          key: qp-main-${{ github.run_id }}
+          restore-keys: |
+            qp-main-
+
+      - name: results
+        if: always()
+        run: |
+          echo "save.outcome=${{ steps.save.outcome }}"
+          echo "matched-from-main=${{ steps.r_main.outputs.cache-matched-key }}"
+          echo "matched-from-mg=${{ steps.r_mg.outputs.cache-matched-key }}"
+          echo "matched-from-pr=${{ steps.r_pr.outputs.cache-matched-key }}"
+          for d in from-main from-mg from-pr; do
+            if [ -f "$d/marker.txt" ]; then echo "CONTENT $d:"; cat "$d/marker.txt"; fi
+          done
