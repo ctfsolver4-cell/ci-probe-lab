@@ -47,6 +47,17 @@ jobs:
       # the lookup "version" from the paths (+compression), so a different path can never match a
       # saved entry. The first iteration of this probe used distinct paths per step and every
       # lookup missed, including the same-scope control - so no scope conclusion was drawn from it.
+      - name: "CONTROL (push): cross-run prefix restore of an OLDER main entry must HIT"
+        if: github.event_name == 'push'
+        id: pos_main_prior
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: payload
+          key: qp-main-absent-${{ github.run_id }}
+          restore-keys: |
+            qp-main-414765
+
       - name: "CONTROL (push): same-scope restore from refs/heads/main must HIT"
         if: github.event_name == 'push'
         id: pos_main
@@ -118,6 +129,7 @@ jobs:
         run: |
           echo "save.outcome=${{ steps.save.outcome }}"
           echo "CONTROL-push-reads-main=${{ steps.pos_main.outputs.cache-matched-key }}"
+          echo "CONTROL-push-reads-older-main=${{ steps.pos_main_prior.outputs.cache-matched-key }}"
           echo "CROSSING-push-reads-pr=${{ steps.r_prread.outputs.cache-matched-key }}"
           echo "push-reads-mg=${{ steps.r_mg.outputs.cache-matched-key }}"
           echo "CONTROL-pr-reads-pr=${{ steps.pos_pr.outputs.cache-matched-key }}"
