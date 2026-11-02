@@ -72,7 +72,7 @@ jobs:
           restore-keys: |
             qp-mg-
 
-      - name: RESTORE - baseline: can a pull_request run read the default-branch scope?
+      - name: "RESTORE - baseline: can a pull_request run read the default-branch scope?"
         if: github.event_name == 'pull_request'
         id: r_pr
         uses: actions/cache/restore@v4
